@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import auth as admin_auth, credentials, firestore
 from werkzeug.utils import secure_filename
 
 load_dotenv()
@@ -134,6 +134,32 @@ def create_app() -> Flask:
 
     db = _init_firebase()
 
+    def _get_authenticated_user() -> dict[str, Any] | None:
+        auth_header = str(request.headers.get("Authorization") or "").strip()
+        if not auth_header.startswith("Bearer "):
+            return None
+
+        token = auth_header.split(" ", 1)[1].strip()
+        if not token:
+            return None
+
+        try:
+            decoded = admin_auth.verify_id_token(token)
+            return decoded
+        except Exception:
+            return None
+
+    def _get_user_role(uid: str) -> str:
+        try:
+            user_doc = db.collection("users").document(uid).get()
+            if user_doc.exists:
+                data = user_doc.to_dict() or {}
+                role = str(data.get("role") or "").strip().lower()
+                return role
+        except Exception:
+            pass
+        return ""
+
     @app.get("/api/health")
     def health() -> Any:
         return jsonify({"ok": True, "service": "parivesh-backend-python"})
@@ -193,7 +219,11 @@ def create_app() -> Flask:
     @app.post("/api/uploads")
     def uploads() -> Any:
         try:
-            owner_id = str(request.form.get("ownerId") or "").strip()
+            auth_user = _get_authenticated_user()
+            if not auth_user:
+                return jsonify({"message": "Unauthorized."}), 401
+
+            owner_id = str(auth_user.get("uid") or "").strip()
             doc_key = str(request.form.get("docKey") or "").strip()
             uploaded_file = request.files.get("file")
 
@@ -240,13 +270,33 @@ def create_app() -> Flask:
 
     @app.post("/api/process-documents")
     def process_documents() -> Any:
+        auth_user = _get_authenticated_user()
+        if not auth_user:
+            return jsonify({"message": "Unauthorized."}), 401
+
+        requester_uid = str(auth_user.get("uid") or "").strip()
+        requester_role = _get_user_role(requester_uid)
+
         payload = request.get_json(silent=True) or {}
         docs = payload.get("documents")
         application_id = str(payload.get("applicationId") or "").strip()
-        owner_id = str(payload.get("ownerId") or "").strip()
+        owner_id = requester_uid
 
         if not isinstance(docs, list) or not docs:
             return jsonify({"message": "documents array is required."}), 400
+
+        if application_id:
+            app_doc = db.collection("applications").document(application_id).get()
+            if not app_doc.exists:
+                return jsonify({"message": "Application not found."}), 404
+
+            app_data = app_doc.to_dict() or {}
+            app_owner_id = str(app_data.get("ownerId") or "").strip()
+            owner_id = app_owner_id or requester_uid
+
+            privileged_roles = {"admin", "scrutiny", "mom"}
+            if requester_role not in privileged_roles and app_owner_id != requester_uid:
+                return jsonify({"message": "Forbidden."}), 403
 
         processed: list[dict[str, Any]] = []
         for entry in docs:
@@ -319,12 +369,29 @@ def create_app() -> Flask:
 
     @app.get("/api/process-documents-history")
     def process_documents_history() -> Any:
+        auth_user = _get_authenticated_user()
+        if not auth_user:
+            return jsonify({"message": "Unauthorized."}), 401
+
+        requester_uid = str(auth_user.get("uid") or "").strip()
+        requester_role = _get_user_role(requester_uid)
+
         application_id = str(request.args.get("applicationId") or "").strip()
 
         if not application_id:
             return jsonify({"message": "applicationId query param is required."}), 400
 
         try:
+            app_doc = db.collection("applications").document(application_id).get()
+            if not app_doc.exists:
+                return jsonify([])
+
+            app_data = app_doc.to_dict() or {}
+            app_owner_id = str(app_data.get("ownerId") or "").strip()
+            privileged_roles = {"admin", "scrutiny", "mom"}
+            if requester_role not in privileged_roles and app_owner_id != requester_uid:
+                return jsonify({"message": "Forbidden."}), 403
+
             docs = (
                 db.collection("documentProcessingHistory")
                 .where("applicationId", "==", application_id)

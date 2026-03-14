@@ -213,10 +213,24 @@ export default function Page() {
     setEdsResponseNotes("");
   };
 
+  const getBackendAuthHeaders = async () => {
+    const user = auth.currentUser;
+    if (!user) {
+      return {} as Record<string, string>;
+    }
+
+    const token = await user.getIdToken();
+    return {
+      Authorization: `Bearer ${token}`,
+    };
+  };
+
   const loadSectors = async () => {
     try {
       if (backendBaseUrl) {
-        const response = await fetch(`${backendBaseUrl}/api/sectors`);
+        const response = await fetch(`${backendBaseUrl}/api/sectors`, {
+          headers: await getBackendAuthHeaders(),
+        });
         if (response.ok) {
           const rows = (await response.json()) as SectorParameter[];
           setAvailableSectors(rows);
@@ -238,7 +252,9 @@ export default function Page() {
   const loadLocationHierarchy = async () => {
     try {
       if (backendBaseUrl) {
-        const response = await fetch(`${backendBaseUrl}/api/locations`);
+        const response = await fetch(`${backendBaseUrl}/api/locations`, {
+          headers: await getBackendAuthHeaders(),
+        });
         if (response.ok) {
           const rows = (await response.json()) as Array<{ stateName: string; districts: string[] }>;
           const backendMap: Record<string, string[]> = {};
@@ -550,6 +566,7 @@ export default function Page() {
 
             const response = await fetch(`${backendBaseUrl}/api/uploads`, {
               method: "POST",
+              headers: await getBackendAuthHeaders(),
               body: payload,
             });
 
@@ -647,6 +664,7 @@ export default function Page() {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
+              ...(await getBackendAuthHeaders()),
             },
             body: JSON.stringify({
               applicationId: savedApplicationId,

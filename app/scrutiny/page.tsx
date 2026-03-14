@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { db } from "@/lib/firebase";
+import { auth, db } from "@/lib/firebase";
 import { collection, getDocs, updateDoc, doc, query, where } from "firebase/firestore";
 import ProtectedRoute from "../../components/ProtectedRoute";
 import ApplicationTimeline from "../../components/ApplicationTimeline";
@@ -74,6 +74,18 @@ export default function ScrutinyDashboard() {
   const [checklistDrafts, setChecklistDrafts] = useState<Record<string, ChecklistDraft>>({});
   const [processingHistory, setProcessingHistory] = useState<Record<string, ProcessingRun[]>>({});
 
+  const getBackendAuthHeaders = async () => {
+    const user = auth.currentUser;
+    if (!user) {
+      return {} as Record<string, string>;
+    }
+
+    const token = await user.getIdToken();
+    return {
+      Authorization: `Bearer ${token}`,
+    };
+  };
+
   const fetchProcessingHistory = async (appIds: string[]) => {
     if (!backendBaseUrl || appIds.length === 0) {
       setProcessingHistory({});
@@ -84,7 +96,10 @@ export default function ScrutinyDashboard() {
       appIds.map(async (appId) => {
         try {
           const response = await fetch(
-            `${backendBaseUrl}/api/process-documents-history?applicationId=${encodeURIComponent(appId)}`
+            `${backendBaseUrl}/api/process-documents-history?applicationId=${encodeURIComponent(appId)}`,
+            {
+              headers: await getBackendAuthHeaders(),
+            }
           );
 
           if (!response.ok) {
