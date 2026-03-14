@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import mimetypes
 import os
+import json
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -27,7 +28,15 @@ def _init_firebase() -> firestore.Client:
 
     if not firebase_admin._apps:
         if service_account_json:
-            cred = credentials.Certificate(service_account_json)
+            # Support either a local JSON file path or inline JSON content from env vars.
+            parsed_service_account: Any = None
+            try:
+                if service_account_json.strip().startswith("{"):
+                    parsed_service_account = json.loads(service_account_json)
+            except Exception:
+                parsed_service_account = None
+
+            cred = credentials.Certificate(parsed_service_account or service_account_json)
             firebase_admin.initialize_app(cred)
         elif project_id and client_email and private_key:
             cred = credentials.Certificate(
