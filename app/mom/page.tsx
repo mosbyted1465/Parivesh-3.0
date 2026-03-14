@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { db } from "@/lib/firebase";
+import { auth, db } from "@/lib/firebase";
 import {
   collection,
   getDocs,
@@ -11,6 +11,7 @@ import {
   where,
   getDoc,
 } from "firebase/firestore";
+import { onAuthStateChanged } from "firebase/auth";
 import ProtectedRoute from "../../components/ProtectedRoute";
 import ApplicationTimeline from "../../components/ApplicationTimeline";
 import { Document, Packer, Paragraph, TextRun, HeadingLevel } from "docx";
@@ -34,6 +35,13 @@ interface Application {
   sector: string;
   status: string;
   momText?: string;
+  eds?: {
+    remarks?: string;
+    responseNotes?: string;
+  };
+  checklist?: {
+    details?: string;
+  };
 }
 
 interface GistTemplate {
@@ -118,6 +126,11 @@ export default function MoMDashboard() {
 
       const initialGists: { [key: string]: string } = {};
       for (const app of apps) {
+        if ((app.momText || "").trim()) {
+          initialGists[app.id] = app.momText || "";
+          continue;
+        }
+
         try {
           initialGists[app.id] = await generateTemplateGist(app);
         } catch (error) {
@@ -169,7 +182,11 @@ export default function MoMDashboard() {
 
       const momText = gists[id] || "";
       const appRef = doc(db, "applications", id);
-      await updateDoc(appRef, { momText, status: "mom_generated" });
+      await updateDoc(appRef, {
+        momText,
+        status: "mom_generated",
+        updatedAt: new Date().toISOString(),
+      });
       alert("MoM saved successfully.");
       await fetchApplications();
     } catch (error) {
@@ -193,7 +210,10 @@ export default function MoMDashboard() {
       }
 
       const appRef = doc(db, "applications", id);
-      await updateDoc(appRef, { status: "finalized" });
+      await updateDoc(appRef, {
+        status: "finalized",
+        updatedAt: new Date().toISOString(),
+      });
       alert("MoM finalized successfully.");
       await fetchApplications();
     } catch (error) {
@@ -299,7 +319,19 @@ export default function MoMDashboard() {
   };
 
   useEffect(() => {
-    fetchApplications();
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (!user) {
+        setApplications([]);
+        setGists({});
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      await fetchApplications();
+    });
+
+    return () => unsubscribe();
   }, []);
 
   if (loading) {
@@ -336,6 +368,19 @@ export default function MoMDashboard() {
                 <p><strong>Status:</strong> {app.status}</p>
               </div>
               <p className="mb-4"><strong>Description:</strong> {app.description}</p>
+
+              <div className="card" style={{ marginBottom: 12 }}>
+                <h4 className="text-sm font-semibold" style={{ marginTop: 0 }}>Scrutiny Inputs</h4>
+                <p className="text-sm" style={{ marginBottom: 6 }}>
+                  <strong>Scrutiny Remarks:</strong> {app.eds?.remarks || "Not provided"}
+                </p>
+                <p className="text-sm" style={{ marginBottom: 6 }}>
+                  <strong>PP Response:</strong> {app.eds?.responseNotes || "Not provided"}
+                </p>
+                <p className="text-sm" style={{ marginBottom: 0 }}>
+                  <strong>Checklist Notes:</strong> {app.checklist?.details || "Not provided"}
+                </p>
+              </div>
 
               <div className="mb-4">
                 <ApplicationTimeline currentStatus={app.status} />

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { db } from "@/lib/firebase";
+import { auth, db } from "@/lib/firebase";
 import {
   collection,
   doc,
@@ -11,6 +11,7 @@ import {
   updateDoc,
   writeBatch,
 } from "firebase/firestore";
+import { onAuthStateChanged } from "firebase/auth";
 import ProtectedRoute from "../../components/ProtectedRoute";
 import { isPermanentAdminEmail } from "@/lib/rbac";
 import { getAllStatesWithDistricts } from "india-state-district";
@@ -26,11 +27,18 @@ interface Application {
   projectName: string;
   location: string;
   status: string;
+  description?: string;
   category?: string;
   sector?: string;
   payment?: {
     status?: string;
   };
+  documents?: Array<{
+    key?: string;
+    name?: string;
+    url?: string;
+    contentType?: string;
+  }>;
 }
 
 interface GistTemplate {
@@ -92,6 +100,7 @@ export default function AdminDashboard() {
   const [sectors, setSectors] = useState<SectorParameter[]>([]);
   const [locations, setLocations] = useState<LocationHierarchyItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedApplicationId, setSelectedApplicationId] = useState<string | null>(null);
 
   const [selectedCategory, setSelectedCategory] = useState<"A" | "B1" | "B2">("A");
   const [templateText, setTemplateText] = useState(defaultTemplate);
@@ -102,7 +111,21 @@ export default function AdminDashboard() {
   const [seedingLocations, setSeedingLocations] = useState(false);
 
   useEffect(() => {
-    loadAll();
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (!user) {
+        setUsers([]);
+        setApplications([]);
+        setTemplates([]);
+        setSectors([]);
+        setLocations([]);
+        setLoading(false);
+        return;
+      }
+
+      await loadAll();
+    });
+
+    return () => unsubscribe();
   }, []);
 
   const loadAll = async () => {
@@ -138,13 +161,47 @@ export default function AdminDashboard() {
         projectName: item.data().projectName,
         location: item.data().location,
         status: item.data().status,
+        description: item.data().description,
         category: item.data().category,
         sector: item.data().sector,
         payment: item.data().payment,
+        documents: item.data().documents,
       }));
       setApplications(appsData);
     } catch (error) {
       console.error("Error fetching applications:", error);
+    }
+  };
+
+  const selectedApplication =
+    applications.find((app) => app.id === selectedApplicationId) || null;
+
+  const handleFinalApproval = async (app: Application) => {
+    if (app.status === "finalized") {
+      alert("This project is already finalized.");
+      return;
+    }
+
+    if (!(app.status === "mom_generated" || app.status === "referred")) {
+      alert("Final approval is available after referral/MoM stage only.");
+      return;
+    }
+
+    try {
+      await updateDoc(doc(db, "applications", app.id), {
+        status: "finalized",
+        updatedAt: new Date().toISOString(),
+        adminApproval: {
+          approvedByRole: "admin",
+          approvedAt: serverTimestamp(),
+        },
+      });
+
+      alert("Project finalized successfully.");
+      await fetchApplications();
+    } catch (error) {
+      console.error("Error finalizing project:", error);
+      alert("Failed to finalize project.");
     }
   };
 
@@ -570,6 +627,7 @@ export default function AdminDashboard() {
                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Sector</th>
                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Fee</th>
                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
@@ -585,11 +643,63 @@ export default function AdminDashboard() {
                           {app.status.replace("_", " ")}
                         </span>
                       </td>
+                      <td className="px-4 py-2 whitespace-nowrap text-sm">
+                        <button
+                          type="button"
+                          className="button button-secondary"
+                          style={{ marginRight: 8 }}
+                          onClick={() =>
+                            setSelectedApplicationId((prev) => (prev === app.id ? null : app.id))
+                          }
+                        >
+                          {selectedApplicationId === app.id ? "Hide" : "View"}
+                        </button>
+                        <button
+                          type="button"
+                          className="button"
+                          onClick={() => handleFinalApproval(app)}
+                          disabled={app.status === "finalized"}
+                        >
+                          Final Approve
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+
+            {selectedApplication && (
+              <div className="card" style={{ marginTop: 12 }}>
+                <h3 style={{ marginTop: 0 }}>{selectedApplication.projectName}</h3>
+                <p style={{ margin: "6px 0" }}>
+                  <strong>Status:</strong> {selectedApplication.status.replace("_", " ")}
+                </p>
+                <p style={{ margin: "6px 0" }}>
+                  <strong>Description:</strong> {selectedApplication.description || "Not available"}
+                </p>
+                <div>
+                  <strong>Documents:</strong>
+                  {selectedApplication.documents?.length ? (
+                    <ul style={{ marginTop: 8 }}>
+                      {selectedApplication.documents.map((file, idx) => (
+                        <li key={`${selectedApplication.id}-doc-${idx}`}>
+                          {file.url ? (
+                            <a href={file.url} target="_blank" rel="noreferrer">
+                              {file.key || "document"}: {file.name || "Open"}
+                            </a>
+                          ) : (
+                            <span>{file.key || "document"}: URL not available</span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p style={{ color: "var(--muted)", marginTop: 6 }}>No document links available.</p>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </main>

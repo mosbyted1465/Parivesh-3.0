@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { auth, db } from "@/lib/firebase";
 import { collection, getDocs, updateDoc, doc, query, where } from "firebase/firestore";
+import { onAuthStateChanged } from "firebase/auth";
 import ProtectedRoute from "../../components/ProtectedRoute";
 import ApplicationTimeline from "../../components/ApplicationTimeline";
 import {
@@ -18,6 +19,12 @@ interface Application {
   description: string;
   status: string;
   ownerEmail?: string;
+  documents?: Array<{
+    key?: string;
+    name?: string;
+    url?: string;
+    contentType?: string;
+  }>;
   payment?: {
     method?: "upi" | "qr";
     reference?: string;
@@ -180,17 +187,34 @@ export default function ScrutinyDashboard() {
         }
       }
 
+      const nextExtra = { ...extra };
+      if (newStatus === "referred") {
+        const checklist = checklistDrafts[app.id];
+        nextExtra.checklist = {
+          documentsVerified: !!checklist?.documentsVerified,
+          paymentVerified: !!checklist?.paymentVerified,
+          details: checklist?.details || "",
+          lockedByScrutiny: true,
+          updatedAt: new Date().toISOString(),
+        };
+      }
+
       const appRef = doc(db, "applications", app.id);
       await updateDoc(appRef, {
         status: newStatus,
         updatedAt: new Date().toISOString(),
-        ...extra,
+        ...nextExtra,
       });
 
       await fetchApplications();
     } catch (error) {
       console.error("Error updating status:", error);
-      alert("Failed to update status. Please try again.");
+      const code = (error as { code?: string })?.code;
+      if (code === "permission-denied") {
+        alert("Status update blocked by rules. Save checklist first, then retry the transition.");
+      } else {
+        alert("Failed to update status. Please try again.");
+      }
     }
   };
 
@@ -248,7 +272,18 @@ export default function ScrutinyDashboard() {
   };
 
   useEffect(() => {
-    fetchApplications();
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (!user) {
+        setApplications([]);
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      await fetchApplications();
+    });
+
+    return () => unsubscribe();
   }, []);
 
   if (loading) {
@@ -279,6 +314,35 @@ export default function ScrutinyDashboard() {
               <p className="text-sm text-gray-600 mb-1"><strong>Location:</strong> {app.location}</p>
               <p className="text-sm text-gray-600 mb-1"><strong>Applicant:</strong> {app.ownerEmail || "N/A"}</p>
               <p className="text-sm text-gray-600 mb-2"><strong>Description:</strong> {app.description}</p>
+
+              <div className="card" style={{ marginBottom: 12 }}>
+                <h4 className="text-sm font-semibold" style={{ marginTop: 0 }}>Uploaded Documents</h4>
+                {app.documents?.length ? (
+                  <div style={{ display: "grid", gap: 6 }}>
+                    {app.documents.map((file, index) => (
+                      <div key={`${app.id}-doc-${index}`} style={{ fontSize: "0.85rem" }}>
+                        <strong>{file.key || `Document ${index + 1}`}:</strong>{" "}
+                        {file.url ? (
+                          <a
+                            href={file.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{ color: "#1d4ed8", textDecoration: "underline" }}
+                          >
+                            {file.name || "Open PDF"}
+                          </a>
+                        ) : (
+                          <span style={{ color: "var(--muted)" }}>URL not available</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs" style={{ margin: 0, color: "var(--muted)" }}>
+                    No document links available on this application.
+                  </p>
+                )}
+              </div>
 
               <p className="text-sm text-gray-600 mb-2">
                 <strong>Fee Payment:</strong>{" "}

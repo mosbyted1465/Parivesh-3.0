@@ -12,7 +12,7 @@ export type ApplicationStatus = (typeof WORKFLOW_STATUSES)[number];
 
 const ALLOWED_TRANSITIONS: Record<ApplicationStatus, ApplicationStatus[]> = {
   draft: ["submitted"],
-  submitted: ["under_scrutiny"],
+  submitted: ["under_scrutiny", "eds"],
   under_scrutiny: ["eds", "referred"],
   eds: ["under_scrutiny"],
   referred: ["mom_generated"],
