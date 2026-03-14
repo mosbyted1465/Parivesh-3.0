@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { auth, db, storage } from "@/lib/firebase";
+import { auth, db } from "@/lib/firebase";
 import {
   addDoc,
   collection,
@@ -12,7 +12,6 @@ import {
   where,
   doc,
 } from "firebase/firestore";
-import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { onAuthStateChanged } from "firebase/auth";
 import { getAllStatesWithDistricts } from "india-state-district";
 import ProtectedRoute from "../../components/ProtectedRoute";
@@ -430,6 +429,41 @@ export default function Page() {
     };
   };
 
+  const uploadPdfViaBackend = async (
+    ownerId: string,
+    docKey: string,
+    file: File,
+    label: string
+  ): Promise<StoredDocument> => {
+    if (!backendBaseUrl) {
+      throw new Error("BACKEND_UPLOAD_REQUIRED");
+    }
+
+    const payload = new FormData();
+    payload.append("ownerId", ownerId);
+    payload.append("docKey", docKey);
+    payload.append("file", file);
+
+    const response = await fetch(`${backendBaseUrl}/api/uploads`, {
+      method: "POST",
+      headers: await getBackendAuthHeaders(),
+      body: payload,
+    });
+
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { message?: string };
+      throw new Error(body.message || `Backend upload failed for ${label}.`);
+    }
+
+    const uploaded = (await response.json()) as StoredDocument;
+    return {
+      key: docKey,
+      name: uploaded.name,
+      url: uploaded.url,
+      contentType: uploaded.contentType || file.type,
+    };
+  };
+
   const loadSectors = async () => {
     try {
       if (backendBaseUrl) {
@@ -808,6 +842,11 @@ export default function Page() {
       return;
     }
 
+    if (!backendBaseUrl) {
+      alert("Backend upload service is required. Set NEXT_PUBLIC_BACKEND_URL and ensure backend is running.");
+      return;
+    }
+
     const missingDocs = activeRequiredDocuments.filter(
       (item) => !documents[item.key] && !existingDocuments[item.key]
     );
@@ -885,43 +924,13 @@ export default function Page() {
             return;
           }
 
-          if (backendBaseUrl) {
-            const payload = new FormData();
-            payload.append("ownerId", user.uid);
-            payload.append("docKey", requiredDoc.key);
-            payload.append("file", file);
-
-            const response = await fetch(`${backendBaseUrl}/api/uploads`, {
-              method: "POST",
-              headers: await getBackendAuthHeaders(),
-              body: payload,
-            });
-
-            if (!response.ok) {
-              const body = (await response.json().catch(() => ({}))) as { message?: string };
-              throw new Error(body.message || `Backend upload failed for ${requiredDoc.label}.`);
-            }
-
-            const uploaded = (await response.json()) as StoredDocument;
-            uploadedDocuments.push({
-              key: requiredDoc.key,
-              name: uploaded.name,
-              url: uploaded.url,
-              contentType: uploaded.contentType || file.type,
-            });
-          } else {
-            const filePath = `applications/${user.uid}/${Date.now()}_${requiredDoc.key}_${file.name}`;
-            const storageRef = ref(storage, filePath);
-            await uploadBytes(storageRef, file);
-            const fileUrl = await getDownloadURL(storageRef);
-
-            uploadedDocuments.push({
-              key: requiredDoc.key,
-              name: file.name,
-              url: fileUrl,
-              contentType: file.type,
-            });
-          }
+          const uploadedDoc = await uploadPdfViaBackend(
+            user.uid,
+            requiredDoc.key,
+            file,
+            requiredDoc.label
+          );
+          uploadedDocuments.push(uploadedDoc);
         } else {
           const existingDoc = existingDocuments[requiredDoc.key];
           if (existingDoc) {
@@ -946,43 +955,12 @@ export default function Page() {
           return;
         }
 
-        if (backendBaseUrl) {
-          const payload = new FormData();
-          payload.append("ownerId", user.uid);
-          payload.append("docKey", "affidavitBundle");
-          payload.append("file", affidavitBundleFile);
-
-          const response = await fetch(`${backendBaseUrl}/api/uploads`, {
-            method: "POST",
-            headers: await getBackendAuthHeaders(),
-            body: payload,
-          });
-
-          if (!response.ok) {
-            const body = (await response.json().catch(() => ({}))) as { message?: string };
-            throw new Error(body.message || "Backend upload failed for affidavit bundle.");
-          }
-
-          const uploaded = (await response.json()) as StoredDocument;
-          savedAffidavitBundle = {
-            key: "affidavitBundle",
-            name: uploaded.name,
-            url: uploaded.url,
-            contentType: uploaded.contentType || affidavitBundleFile.type,
-          };
-        } else {
-          const filePath = `applications/${user.uid}/${Date.now()}_affidavitBundle_${affidavitBundleFile.name}`;
-          const storageRef = ref(storage, filePath);
-          await uploadBytes(storageRef, affidavitBundleFile);
-          const fileUrl = await getDownloadURL(storageRef);
-
-          savedAffidavitBundle = {
-            key: "affidavitBundle",
-            name: affidavitBundleFile.name,
-            url: fileUrl,
-            contentType: affidavitBundleFile.type,
-          };
-        }
+        savedAffidavitBundle = await uploadPdfViaBackend(
+          user.uid,
+          "affidavitBundle",
+          affidavitBundleFile,
+          "Affidavit Bundle"
+        );
       }
 
       if (savedAffidavitBundle) {
@@ -1012,43 +990,12 @@ export default function Page() {
             return;
           }
 
-          if (backendBaseUrl) {
-            const payload = new FormData();
-            payload.append("ownerId", user.uid);
-            payload.append("docKey", requirement.evidenceKey);
-            payload.append("file", file);
-
-            const response = await fetch(`${backendBaseUrl}/api/uploads`, {
-              method: "POST",
-              headers: await getBackendAuthHeaders(),
-              body: payload,
-            });
-
-            if (!response.ok) {
-              const body = (await response.json().catch(() => ({}))) as { message?: string };
-              throw new Error(body.message || `Backend upload failed for ${requirement.evidenceLabel}.`);
-            }
-
-            const uploaded = (await response.json()) as StoredDocument;
-            savedConditionalEvidence[requirement.evidenceKey] = {
-              key: requirement.evidenceKey,
-              name: uploaded.name,
-              url: uploaded.url,
-              contentType: uploaded.contentType || file.type,
-            };
-          } else {
-            const filePath = `applications/${user.uid}/${Date.now()}_${requirement.evidenceKey}_${file.name}`;
-            const storageRef = ref(storage, filePath);
-            await uploadBytes(storageRef, file);
-            const fileUrl = await getDownloadURL(storageRef);
-
-            savedConditionalEvidence[requirement.evidenceKey] = {
-              key: requirement.evidenceKey,
-              name: file.name,
-              url: fileUrl,
-              contentType: file.type,
-            };
-          }
+          savedConditionalEvidence[requirement.evidenceKey] = await uploadPdfViaBackend(
+            user.uid,
+            requirement.evidenceKey,
+            file,
+            requirement.evidenceLabel
+          );
         }
 
         if (savedConditionalEvidence[requirement.evidenceKey]) {
@@ -1149,10 +1096,9 @@ export default function Page() {
       const message = String((error as { message?: string })?.message || "");
       if (
         message.toLowerCase().includes("cors")
-        || message.toLowerCase().includes("firebasestorage")
-        || message.toLowerCase().includes("storage has not been set up")
+        || message.toLowerCase().includes("backend_upload_required")
       ) {
-        alert("File upload failed because Firebase Storage is not fully configured for this project yet. Open Firebase Console > Storage > Get Started, then retry.");
+        alert("Backend upload service is required. Ensure NEXT_PUBLIC_BACKEND_URL is set and backend server is running.");
       } else if (message.toLowerCase().includes("backend upload failed") || message.toLowerCase().includes("failed to upload file")) {
         alert("File upload failed on backend. Ensure Python backend is running and backend/.env credentials are correct.");
       } else {
